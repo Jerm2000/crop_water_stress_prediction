@@ -1,0 +1,137 @@
+---
+title: "Spatial Crop Project"
+format: pdf
+editor: visual
+---
+
+#### Reading in the Data and Libraries:
+
+```{r}
+library(tidyverse)
+library(viridis)
+library(spmodel)
+library(ggplot2)
+library(FRK)
+
+data <- vroom::vroom('Potato.csv')
+```
+
+```{r}
+# Visualizing the data, removed NAs for this plot
+Not_NA <- data %>%
+  filter(!is.na(data$CWSI))
+ggplot(data = Not_NA, aes(x = POINT_X, y = POINT_Y, color = CWSI)) + 
+  geom_point() +
+  theme_minimal()
+```
+
+```{r}
+# This plot shows that there is some spatial_correlation
+emp_var <- spmodel::eacf(CWSI~., data=data, xcoord=POINT_X, ycoord=POINT_Y)
+plot(emp_var)
+```
+
+### Feature Engineering:
+
+```{r}
+# Creating Spatial Features
+data <- data %>%
+  filter(!is.na(CWSI))
+loc_matrix <- data %>%
+  select(c(POINT_X, POINT_Y)) %>%
+  as.matrix()
+  
+K <- 10
+centers <- fields::cover.design(loc_matrix, nd=K)$design
+dist_between_centers <- fields::rdist(centers)
+the_scale <- 1.5*max(apply(dist_between_centers,1,function(x){sort(x)[2]}))
+spatial_features <- local_basis(
+  manifold=plane(),
+  loc=centers,
+  scale=rep(the_scale, K),
+  type="bisquare" #or "Gaussian" or "exp"
+  ) %>%
+  eval_basis(loc_matrix) %>%
+  as.matrix()
+colnames(spatial_features) <- paste0("SF", 1:K)
+spatial_dataframe <- bind_cols(data, spatial_features)
+```
+
+```{r}
+# Plot to help visualize spatial feature 1
+ggplot() +
+  geom_point(
+    data = spatial_dataframe %>%
+      filter(!is.na(SF1) & is.finite(SF1)),
+    aes(x = POINT_X, y = POINT_Y, color = SF1),
+    na.rm = TRUE
+  ) +
+  geom_point(
+    data = as.data.frame(centers),
+    aes(x = POINT_X, y = POINT_Y),
+    color = "red"
+  ) +
+  scale_color_viridis(na.value = NA) +
+  theme_minimal()
+```
+
+### Spatial_Model:
+
+```{r}
+# Spatial Model Creation
+spatial_model <- splm(CWSI ~ SLOPE + TWI + ASPECT + ECA_SHALLOW + NDVI + SF1 + SF2 + SF3 + SF4 + SF5 + SF6 + SF7 + SF8 + SF9 + SF10, data = spatial_dataframe, spcov_type = 'exponential', xcoord = POINT_X, ycoord = POINT_Y)
+```
+
+### Model Validation:
+
+```{r}
+# Model Validation, All of these look good
+spatial_dataframe$std_decor_resids <- rstandard(spatial_model)
+variogram <- esv(std_decor_resids ~ POINT_X + POINT_Y, data=spatial_dataframe, xcoord = POINT_X, ycoord = POINT_Y)
+plot(variogram)
+
+# Normality Assumption:
+linear_model <- lm(CWSI ~ ., data = spatial_dataframe)
+ggplot(data = data.frame(x = MASS::stdres(linear_model)),
+       aes(x = x)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 bins = 30) +
+  stat_function(fun = dnorm,
+                args = list(mean = 0, sd = 1),
+                color = "red",
+                linewidth = 1) +
+  labs(x = "Standardized residuals",
+       y = "Density") + 
+  xlim(-5, 5)
+
+# Equal Variance Assumption
+df <- data.frame(
+  fitted = fitted(linear_model),
+  resid = MASS::stdres(linear_model)
+)
+ggplot(df, aes(x = fitted, y = resid)) + 
+  geom_point() +
+  labs(x = 'Fitted',
+       y = 'Residuals') 
+```
+
+```{r}
+pseudoR2(spatial_model)
+```
+
+### Cross Validation:
+
+```{r}
+# Cross Validation, Does take a while to run
+K <- 10
+folds <- rep(1:K, length = nrow(spatial_dataframe)) %>%
+  sample()
+
+cross_validate_splm <- function(fold_index) {
+  test_idx <- which(folds == fold_index)
+  model <- splm(CWSI ~ SLOPE + TWI + ASPECT + ECA_SHALLOW + NDVI + SF1 + SF2 + SF3 + SF4 + SF5 + SF6 + SF7 + SF8 + SF9 + SF10, spcov_type = 'exponential', xcoord = POINT_X,  ycoord = POINT_Y, data = spatial_dataframe[-test_idx, ])
+  sqrt(mean((spatial_dataframe$CWSI[test_idx] - predict(model, newdata = spatial_dataframe[test_idx, ]))^2))
+}
+rmse_results <- sapply(1:K, FUN=cross_validate_splm)
+mean(rmse_results)
+```
