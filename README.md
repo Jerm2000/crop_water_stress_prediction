@@ -1,8 +1,7 @@
 # crop_water_stress_prediction
 Must include: 
 1. Description - A description of what the trained model is and does (include details on the model
-structure used such as any engineered features and/or correlation structures). In this description,
-include a measure of how well your model predicts. On a grading note, I have tried several models
+structure used such as any engineered features and/or correlation structures)(That means that we can write out the model). In this description, include a measure of how well your model predicts. On a grading note, I have tried several models
 for this project so I know what a good model prediction accuracy is. If you using a model that gets
 significantly higher than the RMSE of my best model, you will be docked accordingly.
 2. Dependencies - A list of any library dependencies that are needed to appropriately use the model
